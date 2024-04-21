@@ -1,5 +1,7 @@
 package com.getreadyforthenext.core.config;
 
+import com.getreadyforthenext.core.enums.Role;
+import com.getreadyforthenext.core.security.JwtTokenFilter;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
 import org.springframework.beans.factory.annotation.Value;
@@ -14,8 +16,8 @@ import org.springframework.security.core.AuthenticationException;
 import org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.security.oauth2.client.userinfo.DefaultOAuth2UserService;
-import org.springframework.security.oauth2.core.user.OAuth2User;
 import org.springframework.security.web.SecurityFilterChain;
+import org.springframework.security.web.authentication.UsernamePasswordAuthenticationFilter;
 
 import java.io.IOException;
 
@@ -23,26 +25,39 @@ import java.io.IOException;
 @EnableWebSecurity
 public class SecurityConfig {
 
+    private final JwtTokenFilter jwtTokenFilter;
     @Value("${oauth.successUrl}")
     String successUrl;
-
     @Value("${oauth.failureUrl}")
     String failureUrl;
+
+    public SecurityConfig(JwtTokenFilter jwtTokenFilter) {
+        this.jwtTokenFilter = jwtTokenFilter;
+    }
 
     @Bean
     SecurityFilterChain securityFilterChain(HttpSecurity httpSecurity) throws Exception {
         httpSecurity.csrf(AbstractHttpConfigurer::disable);
         httpSecurity.sessionManagement(session -> session.sessionCreationPolicy(SessionCreationPolicy.STATELESS));
 
-        httpSecurity.oauth2Login(oauth2LoginCustomizer -> oauth2LoginCustomizer.loginPage("/"));
-        httpSecurity.oauth2Login(oauth2LoginCustomizer -> oauth2LoginCustomizer.userInfoEndpoint(userInfo -> userInfo.userService(this.oAuth2UserService())));
-        httpSecurity.oauth2Login(oauth2LoginCustomizer -> oauth2LoginCustomizer.successHandler(this::successHandler));
-        httpSecurity.oauth2Login(oauth2LoginCustomizer -> oauth2LoginCustomizer.failureHandler(this::failureHandler));
+        httpSecurity.oauth2Login(oauth2LoginCustomizer -> {
+            oauth2LoginCustomizer.userInfoEndpoint(userInfo -> userInfo.userService(oAuth2UserService()));
+            oauth2LoginCustomizer.successHandler(this::successHandler);
+            oauth2LoginCustomizer.failureHandler(this::failureHandler);
+        });
 
-        httpSecurity.authorizeHttpRequests((authorizeHttpRequests) -> authorizeHttpRequests.requestMatchers("/").permitAll());
-        httpSecurity.authorizeHttpRequests((authorizeHttpRequests) -> authorizeHttpRequests.requestMatchers("/oauth2/authorization/google").permitAll());
-        httpSecurity.authorizeHttpRequests((authorizeHttpRequests) -> authorizeHttpRequests.requestMatchers("/actuator/**").hasRole("ADMIN"));
-        httpSecurity.authorizeHttpRequests(authorizeHttpRequests -> authorizeHttpRequests.anyRequest().authenticated());
+        httpSecurity.exceptionHandling(exceptionHandling -> exceptionHandling.authenticationEntryPoint((request, response, authException) -> {
+            response.sendError(HttpServletResponse.SC_UNAUTHORIZED, authException.getMessage());
+        }));
+
+        httpSecurity.authorizeHttpRequests((authorizeHttpRequests) -> {
+            authorizeHttpRequests.requestMatchers("/").permitAll();
+            authorizeHttpRequests.requestMatchers("/oauth2/authorization/google").permitAll();
+            authorizeHttpRequests.requestMatchers("/actuator/**").hasRole(Role.ADMIN.toString());
+            authorizeHttpRequests.anyRequest().authenticated();
+        });
+
+        httpSecurity.addFilterBefore(jwtTokenFilter, UsernamePasswordAuthenticationFilter.class);
 
         return httpSecurity.build();
     }
@@ -53,10 +68,6 @@ public class SecurityConfig {
     }
 
     private void successHandler(HttpServletRequest request, HttpServletResponse response, Authentication authentication) throws IOException {
-        OAuth2User oauth2User = (OAuth2User) authentication.getPrincipal();
-        System.out.println((String) oauth2User.getAttribute("name"));
-        System.out.println((String) oauth2User.getAttribute("email"));
-
         response.sendRedirect(this.successUrl + "?accessToken=" + "token");
     }
 
